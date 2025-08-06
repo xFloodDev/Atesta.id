@@ -1,9 +1,13 @@
+
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { logger } from 'hono/logger';
+import 'dotenv/config';
 
-// Definisikan tipe data untuk request payload.
-// Ini memastikan kita selalu menerima data yang benar dari frontend.
+// Impor kedua service
+// import { checkKredibel } from './services/kredibel.service'; // Kita nonaktifkan sementara
+import { checkSlither } from './services/slither.service';
+
 type AnalysisRequestPayload = {
   transactionDetails: {
     to: string;
@@ -11,73 +15,74 @@ type AnalysisRequestPayload = {
     value?: string;
     data?: string;
   };
+  offChainEntity?: string;
   sourceUrl: string;
   chainId: string;
 };
 
-// Inisialisasi aplikasi Hono
 const app = new Hono();
 
 // --- Middleware ---
-// Middleware ini akan berjalan di setiap request.
-
-// 1. Logger: Untuk menampilkan log request di terminal saat development.
 app.use('*', logger());
-
-// 2. CORS (Cross-Origin Resource Sharing):
-// Ini WAJIB agar ekstensi frontend Anda bisa berkomunikasi dengan backend ini.
-app.use(
-  '/api/*',
-  cors({
-    origin: '*', // Untuk development, kita izinkan semua. Nanti bisa diperketat.
-    allowMethods: ['POST', 'GET', 'OPTIONS'],
-  })
-);
+app.use('/api/*', cors({ origin: '*', allowMethods: ['POST', 'GET', 'OPTIONS'] }));
 
 // --- Routes ---
-// Mendefinisikan endpoint API kita.
+app.get('/', (c) => c.json({ message: 'Atesta.id Analysis Server is running!' }));
 
-// Endpoint untuk health check, memastikan server berjalan.
-app.get('/', (c) => {
-  return c.json({ message: 'Atesta.id Analysis Server is running!' });
-});
-
-// Endpoint utama untuk analisis transaksi.
 app.post('/api/analyze', async (c) => {
   try {
     const payload = await c.req.json<AnalysisRequestPayload>();
+    const { transactionDetails, chainId } = payload;
 
-    // Validasi input dasar
-    if (!payload.transactionDetails || !payload.transactionDetails.to) {
+    if (!transactionDetails || !transactionDetails.to) {
       return c.json({ error: 'Invalid transaction details provided.' }, 400);
     }
 
-    console.log('Menerima permintaan analisis untuk:', payload.transactionDetails.to);
+    console.log('Menerima permintaan analisis untuk:', transactionDetails.to);
 
-    // --- LOGIKA ANALISIS AKAN DIMASUKKAN DI SINI ---
-    // Untuk sekarang, kita kembalikan data palsu (mock data).
+    // --- LOGIKA ANALISIS GABUNGAN ---
 
-    const mockResponse = {
-      riskScore: 85,
-      riskLevel: 'High',
-      summary: 'Risiko Sangat Tinggi Terdeteksi',
-      details: [
+    // 1. Analisis Off-Chain (Kredibel) - Masih menggunakan data palsu/mock
+    const kredibelResult = {
+        status: 'Clear',
+        message: 'Layanan pemeriksaan rekening akan segera tersedia.'
+    };
+
+    // 2. Analisis On-Chain (Slither) - Menggunakan data nyata
+    // Kita asumsikan alamat 'to' adalah alamat kontrak untuk dianalisis
+    const slitherResult = await checkSlither(transactionDetails.to, chainId);
+
+    // 3. Gabungkan hasil analisis menjadi satu respons
+    const details = [
         {
           layer: 'off-chain',
           title: 'Pemeriksaan Laporan Lokal',
-          status: 'High',
-          message: 'Rekening terkait terdeteksi di database penipuan Kredibel.com (12 laporan).',
+          status: kredibelResult.status,
+          message: kredibelResult.message,
         },
         {
           layer: 'on-chain-static',
-          title: 'Analisis Smart Contract',
-          status: 'Medium',
-          message: 'Ditemukan 2 kerentanan tingkat medium.',
-        },
-      ],
+          title: 'Analisis Keamanan Smart Contract',
+          status: slitherResult.status,
+          message: slitherResult.message,
+        }
+    ];
+
+    // Tentukan skor dan level risiko akhir berdasarkan temuan paling parah
+    let finalRiskLevel: 'High' | 'Medium' | 'Low' | 'Clear' = 'Clear';
+    if (details.some(d => d.status === 'High')) {
+        finalRiskLevel = 'High';
+    } else if (details.some(d => d.status === 'Medium')) {
+        finalRiskLevel = 'Medium';
+    }
+
+    const finalResponse = {
+      riskLevel: finalRiskLevel,
+      summary: `Analisis Selesai: Risiko Ditemukan Tingkat ${finalRiskLevel}`,
+      details: details,
     };
 
-    return c.json(mockResponse);
+    return c.json(finalResponse);
 
   } catch (error) {
     console.error('Error processing analysis request:', error);
